@@ -1,7 +1,6 @@
 import express from 'express';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { ListResourcesRequestSchema, ListResourceTemplatesRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { SearchEngine } from './search-engine.js';
 import { randomUUID } from 'crypto';
@@ -31,34 +30,18 @@ const sessions = new Map<string, SessionContext>();
 
 // Helper to register tools on a server instance
 function setupServerTools(server: McpServer) {
-  // Register resource handlers (optional MCP protocol methods)
-  // Use the underlying Server instance to set custom request handlers
-  server.server.setRequestHandler(ListResourcesRequestSchema, async () => {
-    console.log('Handling resources/list request - returning empty resources array');
-    return {
-      resources: []
-    };
-  });
-
-  server.server.setRequestHandler(ListResourceTemplatesRequestSchema, async () => {
-    console.log('Handling resources/templates/list request - returning empty resourceTemplates array');
-    return {
-      resourceTemplates: []
-    };
-  });
-
   // 1. Tool: search
   server.tool(
     'search',
-    'Search the IBM watsonx Orchestrate ADK documentation to find relevant pages. Returns a list of page links with summaries (NO full content or code). Each result includes: title, link (path for query_docs), category, documentType, summary (brief description without code), hasCodeExamples (boolean), sections (list of section titles), and relevanceScore. Use this tool FIRST to identify relevant documentation pages. Then use query_docs with the returned link to read the full page content including code examples. Example workflow: 1) search for "Python tool decorator" → get link "tools/create_tool", 2) query_docs with "cat /tools/create_tool.md" → get full content with code.',
+    'Search the IBM watsonx Orchestrate ADK documentation to find the most relevant sections, not just pages. Returns compact section-level results with title, link, sectionTitle, lineRange, category, documentType, summary, hasCodeExamples, relevanceScore, and a suggestedReadCommand for query_docs. Use this tool FIRST. Then read only the suggested line range with query_docs to keep context small and precise. Example workflow: 1) search for "Python tool decorator" → get link "tools/create_tool", sectionTitle, and lineRange like "15-45", 2) query_docs with the suggested command such as "head -n 45 /tools/create_tool.md | tail -n 31".',
     {
-      query: z.string().describe('The search query/keywords to find relevant documentation pages')
+      query: z.string().describe('The search query/keywords to find relevant documentation sections')
     },
     async ({ query }) => {
       try {
         console.log(`Executing search tool for query: "${query}"`);
         const results = await searchEngine.search(query, 10);
-        
+
         if (results.length === 0) {
           return {
             content: [
@@ -70,19 +53,23 @@ function setupServerTools(server: McpServer) {
           };
         }
 
-        // Format results with minimal JSON output optimized for LLM consumption
         const formattedResults = results.map((result: any) => {
           const cleanPath = result.path.replace(/^\//, '').replace(/\.md$/, '');
-          
-          // Build minimal structured result - only essential fields for decision making
+          const lineStart = Number(result.lineStart || 1);
+          const lineEnd = Number(result.lineEnd || lineStart);
+          const lineCount = Math.max(lineEnd - lineStart + 1, 1);
+
           const structuredResult = {
             title: result.pageTitle,
             link: cleanPath,
+            sectionTitle: result.sectionTitle || 'Overview',
+            lineRange: result.lineRange || `${lineStart}-${lineEnd}`,
             documentType: result.documentType || 'guide',
+            category: result.category || 'general',
             summary: result.contentSummary || '',
             hasCodeExamples: result.hasCodeExamples || false,
-            sections: result.sections || [],
-            fileSize: result.fileSize || 0
+            relevanceScore: Number((result._relevance_score || 0).toFixed(4)),
+            suggestedReadCommand: `head -n ${lineEnd} /${cleanPath}.md | tail -n ${lineCount}`
           };
 
           return {
@@ -112,9 +99,9 @@ function setupServerTools(server: McpServer) {
   // 2. Tool: query_docs
   server.tool(
     'query_docs',
-    'Read content from pages identified by the search tool. This is a read-only shell-like interface to a virtualized filesystem containing ONLY IBM watsonx Orchestrate ADK documentation (markdown files and OpenAPI specs). NOT a real shell - nothing runs on any machine. **Typical workflow:** 1) Use search tool to find relevant pages (returns links like "tools/create_tool"), 2) Use THIS tool to read full content: "cat /tools/create_tool.md" (note: add leading / and .md extension to the link from search results). Returns complete page content including code examples, API specs, and detailed instructions. **Supported commands:** cat (read full file), head (read first N lines), tail (read last N lines), rg/grep (search with regex), tree/ls (explore structure), jq (parse JSON). **Examples:** - Read full page: "cat /tools/create_tool.md" - Read first 100 lines: "head -100 /getting-started/cli.md" - Read multiple pages: "cat /tools/create_tool.md /tools/manage_tool.md" - Search within files: "rg -C 3 \'@tool\' /tools/" - Explore structure: "tree /apis -L 2" - Parse OpenAPI: "cat /openapi/spec.json | jq \'.paths | keys\'" **Important:** Each call is STATELESS (working directory resets to /). Use absolute paths or chain commands with && (e.g., "cd /apis && ls"). Output truncated to 30KB per call.',
+    'Read content from pages identified by the search tool. This is a read-only shell-like interface to a virtualized filesystem containing ONLY IBM watsonx Orchestrate ADK documentation (markdown files and OpenAPI specs). NOT a real shell - nothing runs on any machine. Typical workflow: 1) use search to find the best section, 2) copy the returned suggestedReadCommand or use the returned lineRange to read only that slice, 3) expand to nearby lines only if needed. Prefer bounded reads over full-file reads to reduce token usage and avoid context rot. Supported commands: cat, head, tail, sed, rg/grep, tree/ls, jq. Examples: "head -n 45 /tools/create_tool.md | tail -n 31", "sed -n \'15,45p\' /tools/create_tool.md", "rg -n -C 2 \'@tool|decorator\' /tools/create_tool.md". Important: each call is STATELESS (working directory resets to /). Use absolute paths or chain commands with &&. Output truncated to 30KB per call.',
     {
-      query: z.string().describe('Shell command to read documentation (e.g., "cat /tools/create_tool.md")')
+      query: z.string().describe('Read-only shell command to inspect documentation, preferably with bounded line ranges')
     },
     async ({ query }) => {
       try {

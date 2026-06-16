@@ -6,74 +6,66 @@ Similar to [MCP Server in ADK](https://developer.watson-orchestrate.ibm.com/mcp_
 ## Tool: search
 
 ```text
-Search the IBM watsonx Orchestrate ADK documentation to find relevant pages. 
-Returns a list of page links with summaries (NO full content or code). 
-Each result includes: title, link (path for query_docs), category, documentType, 
-summary (brief description without code), hasCodeExamples (boolean), sections 
-(list of section titles), and relevanceScore. Use this tool FIRST to identify 
-relevant documentation pages. 
+Search the IBM watsonx Orchestrate ADK documentation to find the most relevant sections, not 
+just pages. Returns compact section-level results with title, link, sectionTitle, lineRange, 
+category, documentType, summary, hasCodeExamples, relevanceScore, and a suggestedReadCommand 
+for query_docs. 
 
-Then use query_docs with the returned link to read the full page content 
-including code examples. Example workflow: 1) search for "Python tool decorator" 
-→ get link "tools/create_tool", 2) query_docs with "cat /tools/create_tool.md" 
-→ get full content with code.
+Use this tool FIRST. Then read only the suggested line range with query_docs to keep context 
+small and precise. 
+
+Example workflow: 
+1) search for "Python tool decorator" → get link "tools/create_tool", sectionTitle, and 
+lineRange like "15-45", 
+2) query_docs with the suggested command such as "head -n 45 /tools/create_tool.md | tail -n 31".
 ```
 
 Example output:
 
 ```json
 [
-    {
-    "title": "Authoring agents with the Orchestrate AI Builder",
-    "link": "ai_builder/creating_agent",
+  {
+    "title": "Authoring Python-Based Tools",
+    "link": "tools/create_tool",
+    "sectionTitle": "Importing Python-based tools",
+    "lineRange": "169-329",
     "documentType": "guide",
-    "summary": "Authoring agents with the Orchestrate AI Builder The Orchestrate AI Builder is a powerful tool that helps you create and refine agents. It simplifies agent creation by allowing you to describe the agent you want. The AI Builder leverages its internal AI to create a new agent from scratch. The AI Bui...",
+    "category": "create_tool.md",
+    "summary": "You can import Python-based tools in two forms: as an individual ...",
     "hasCodeExamples": true,
-    "sections": [
-        "Creating agents",
-        "Refining agents",
-        "Automatic agent refinement (autotune)"
-    ],
-    "fileSize": 15243
-    },
-    {
-        ...
-    }
+    "relevanceScore": 1.66,
+    "suggestedReadCommand": "head -n 329 /tools/create_tool.md | tail -n 161"
+  },
+  {
+    "...": "..."
+  }
 ]
 ```
 
 ## Tool: query_docs
 
 ```text
-Read content from pages identified by the search tool. This is a read-only 
-shell-like interface to a virtualized filesystem containing ONLY IBM watsonx 
-Orchestrate ADK documentation (markdown files and OpenAPI specs). NOT a real 
+Read content from pages identified by the search tool. This is a read-only
+shell-like interface to a virtualized filesystem containing ONLY IBM watsonx
+Orchestrate ADK documentation (markdown files and OpenAPI specs). NOT a real
 shell - nothing runs on any machine.
 
-**Typical workflow:** 
-1) Use search tool to find relevant pages (returns links like 
-"tools/create_tool"), 
-2) Use THIS tool to read full content: 
-"cat /tools/create_tool.md" (note: add leading / and .md extension to the link 
-from search results). Returns complete page content including code examples, 
-API specs, and detailed instructions. 
+Typical workflow:
+1) use search to find the best matching section.
+2) copy the returned suggestedReadCommand or use the returned lineRange to 
+   read only that slice
+3) expand to nearby lines only if needed. Prefer bounded reads over full-file 
+   reads to reduce token usage and avoid context rot.
 
-**Supported commands:** cat (read full file), head (read first N lines), 
-tail (read last N lines), rg/grep (search with regex), tree/ls (explore structure), 
-jq (parse JSON). 
+Supported commands: cat, head, tail, sed, rg/grep, tree/ls, jq
 
-**Examples:** 
-- Read full page: "cat /tools/create_tool.md" 
-- Read first 100 lines: "head -100 /getting-started/cli.md" 
-- Read multiple pages: "cat /tools/create_tool.md /tools/manage_tool.md" 
-- Search within files: "rg -C 3 '@tool' /tools/" 
-- Explore structure: "tree /apis -L 2" 
-- Parse OpenAPI: "cat /openapi/spec.json | jq '.paths | keys'" 
+Examples: 
+"head -n 45 /tools/create_tool.md | tail -n 31", 
+"sed -n \'15,45p\' /tools/create_tool.md", 
+"rg -n -C 2 \'@tool|decorator\' /tools/create_tool.md".
 
-**Important:** 
-Each call is STATELESS (working directory resets to /). Use absolute paths 
-or chain commands with && (e.g., "cd /apis && ls"). Output truncated to 30KB 
-per call.
+Important: each call is STATELESS (working directory resets to /). Use absolute 
+paths or chain commands with &&. Output truncated to 30KB per call.
 ```
 
 

@@ -12,18 +12,22 @@ export interface DocSection {
   path: string;
   pageTitle: string;
   sectionTitle: string;
-  content: string; // Original content with code blocks (for query_docs)
-  contentForEmbedding: string; // Processed for embedding (includes code context)
-  contentSummary: string; // Clean summary without code (for search results)
+  sectionSlug: string;
+  sectionOrder: number;
+  headingLevel: number;
+  lineStart: number;
+  lineEnd: number;
+  lineRange: string;
+  content: string;
+  contentForEmbedding: string;
+  contentSummary: string;
   vector: number[];
-  
-  // Metadata fields
   documentType: 'tutorial' | 'api' | 'guide' | 'reference' | 'overview';
-  category: string; // Top-level folder: 'agents', 'tools', 'apis', etc.
-  subcategory?: string; // Second-level folder if exists
+  category: string;
+  subcategory?: string;
   hasCodeExamples: boolean;
-  sections: string[]; // List of all section titles in the page
-  fileSize: number; // File size in bytes
+  sections: string[];
+  fileSize: number;
 }
 
 interface DocumentMetadata {
@@ -31,6 +35,12 @@ interface DocumentMetadata {
   category: string;
   subcategory?: string;
   hasCodeExamples: boolean;
+}
+
+interface ParsedHeading {
+  title: string;
+  level: number;
+  line: number;
 }
 
 type QueryType = 'exact_match' | 'conceptual' | 'mixed';
@@ -57,10 +67,9 @@ export class SearchEngine {
 
     console.log(`Scanning directory for markdown files: ${this.docsDir}`);
     const mdFiles = await glob('**/*.md', { cwd: this.docsDir });
-    console.log(`Found ${mdFiles.length} markdown files. Parsing & vectorizing with page-level chunking...`);
+    console.log(`Found ${mdFiles.length} markdown files. Parsing & vectorizing with section-level chunking...`);
 
     const sections: DocSection[] = [];
-    let pageCounter = 0;
 
     for (const relativeFilePath of mdFiles) {
       const fullPath = path.join(this.docsDir, relativeFilePath);
@@ -69,18 +78,21 @@ export class SearchEngine {
         const stats = await fs.promises.stat(fullPath);
         const fileSize = stats.size;
         const cleanPath = '/' + relativeFilePath.replace(/\\/g, '/');
-        
-        // Use page-level chunking
-        const pageChunk = this.parseMarkdownPageLevel(cleanPath, content, fileSize);
-        
-        if (pageChunk) {
-          // Construct text block for embedding (includes code context)
-          const embedText = `${pageChunk.pageTitle}\n${pageChunk.sections.join(' ')}\n${pageChunk.contentForEmbedding}`;
+
+        const parsedSections = this.parseMarkdownSections(cleanPath, content, fileSize);
+
+        for (const section of parsedSections) {
+          const embedText = [
+            section.pageTitle,
+            section.sectionTitle,
+            section.sections.join(' '),
+            section.contentForEmbedding
+          ].join('\n');
           const embedding = await this.getEmbedding(embedText);
 
           sections.push({
-            ...pageChunk,
-            id: `${cleanPath}#page-${pageCounter++}`,
+            ...section,
+            id: `${cleanPath}#${section.sectionSlug}-${section.sectionOrder}`,
             vector: embedding
           });
         }
@@ -94,7 +106,7 @@ export class SearchEngine {
       return;
     }
 
-    console.log(`Creating/Overwriting table 'sections' in LanceDB with ${sections.length} page-level records...`);
+    console.log(`Creating/Overwriting table 'sections' in LanceDB with ${sections.length} section-level records...`);
     // Cast sections to any[] to bypass index signature checks on Connection.createTable
     this.table = await this.db.createTable('sections', sections as any, { mode: 'overwrite' });
 
@@ -118,24 +130,18 @@ export class SearchEngine {
       }
     }
 
-    // Analyze query to determine search strategy
     const queryType = this.analyzeQuery(query);
-    
     const queryVector = await this.getEmbedding(query);
-    
-    // Get initial results (2x limit for reranking)
-    const initialLimit = limit * 2;
+    const initialLimit = Math.max(limit * 4, 20);
+
     const results = await this.table
       .vectorSearch(queryVector)
       .fullTextSearch(query)
       .limit(initialLimit)
       .toArray();
 
-    // Apply simple reranking
     const rerankedResults = this.rerankResults(query, results, queryType);
-    
-    // Return top results after reranking
-    return rerankedResults.slice(0, limit);
+    return this.deduplicateResults(rerankedResults, limit);
   }
 
   private analyzeQuery(query: string): QueryType {
@@ -157,22 +163,32 @@ export class SearchEngine {
   private rerankResults(query: string, results: any[], queryType: QueryType): any[] {
     const queryLower = query.toLowerCase();
     const queryTerms = queryLower.split(/\s+/).filter(t => t.length > 2);
-    
+
     return results.map(result => {
-      let score = 1 - (result._distance || 0); // Convert distance to similarity (higher is better)
-      
-      // Boost for exact title match
-      if (result.pageTitle.toLowerCase().includes(queryLower)) {
-        score += 0.3;
+      let score = 1 - (result._distance || 0);
+
+      const pageTitle = String(result.pageTitle || '').toLowerCase();
+      const sectionTitle = String(result.sectionTitle || '').toLowerCase();
+      const pathValue = String(result.path || '').toLowerCase();
+      const summary = String(result.contentSummary || '').toLowerCase();
+
+      if (sectionTitle.includes(queryLower)) {
+        score += 0.45;
       }
-      
-      // Boost for query terms in title
-      const titleMatches = queryTerms.filter(term => 
-        result.pageTitle.toLowerCase().includes(term)
-      ).length;
-      score += titleMatches * 0.1;
-      
-      // Boost for document type relevance
+      if (pageTitle.includes(queryLower)) {
+        score += 0.25;
+      }
+
+      const sectionMatches = queryTerms.filter(term => sectionTitle.includes(term)).length;
+      const titleMatches = queryTerms.filter(term => pageTitle.includes(term)).length;
+      const pathMatches = queryTerms.filter(term => pathValue.includes(term)).length;
+      const summaryMatches = queryTerms.filter(term => summary.includes(term)).length;
+
+      score += sectionMatches * 0.18;
+      score += titleMatches * 0.08;
+      score += pathMatches * 0.06;
+      score += Math.min(summaryMatches * 0.03, 0.12);
+
       if (queryLower.includes('tutorial') && result.documentType === 'tutorial') {
         score += 0.2;
       }
@@ -182,73 +198,208 @@ export class SearchEngine {
       if ((queryLower.includes('guide') || queryLower.includes('how')) && result.documentType === 'guide') {
         score += 0.15;
       }
-      
-      // Boost for overview pages on broad queries (1-2 word queries)
-      if (queryTerms.length <= 2 && result.documentType === 'overview') {
-        score += 0.15;
+
+      const sectionLength = Math.max((result.lineEnd || 0) - (result.lineStart || 0) + 1, 1);
+      if (queryType === 'exact_match') {
+        score += Math.max(0, 0.18 - Math.min(sectionLength, 120) / 1000);
+      } else if (queryType === 'conceptual') {
+        score += Math.min(sectionLength, 180) / 1500;
       }
-      
-      // Boost for category match
-      if (queryTerms.some(term => result.category.toLowerCase().includes(term))) {
+
+      if (queryTerms.some(term => String(result.category || '').toLowerCase().includes(term))) {
         score += 0.1;
       }
-      
+
+      if (result.hasCodeExamples && queryTerms.some(term => ['code', 'example', 'python', 'javascript', 'typescript'].includes(term))) {
+        score += 0.08;
+      }
+
       return { ...result, _relevance_score: score };
     }).sort((a, b) => b._relevance_score - a._relevance_score);
   }
 
-  private parseMarkdownPageLevel(filePath: string, rawContent: string, fileSize: number): Omit<DocSection, 'id' | 'vector'> | null {
-    const lines = rawContent.split(/\r?\n/);
-    
-    // Find main page title first
-    let pageTitle = '';
-    for (const line of lines) {
-      if (line.startsWith('# ')) {
-        pageTitle = line.substring(2).trim();
+  private deduplicateResults(results: any[], limit: number): any[] {
+    const deduped: any[] = [];
+    const perPathCount = new Map<string, number>();
+    const seenKeys = new Set<string>();
+
+    for (const result of results) {
+      const pathKey = String(result.path || '');
+      const sectionKey = `${pathKey}:${result.lineRange || ''}:${String(result.sectionTitle || '')}`;
+      if (seenKeys.has(sectionKey)) {
+        continue;
+      }
+
+      const currentCount = perPathCount.get(pathKey) || 0;
+      if (currentCount >= 2) {
+        continue;
+      }
+
+      seenKeys.add(sectionKey);
+      perPathCount.set(pathKey, currentCount + 1);
+      deduped.push(result);
+
+      if (deduped.length >= limit) {
         break;
       }
     }
 
-    if (!pageTitle) {
-      // Fallback to filename
-      const base = path.basename(filePath, '.md');
-      pageTitle = base
-        .replace(/[-_]/g, ' ')
-        .replace(/\b\w/g, (char) => char.toUpperCase());
+    return deduped;
+  }
+
+  private parseMarkdownSections(filePath: string, rawContent: string, fileSize: number): Omit<DocSection, 'id' | 'vector'>[] {
+    const lines = rawContent.split(/\r?\n/);
+    const pageTitle = this.extractPageTitle(filePath, lines);
+    const headings = this.extractHeadings(lines);
+    const metadata = this.classifyDocument(filePath, rawContent);
+    const sectionTitles = headings
+      .filter(heading => heading.level >= 2)
+      .map(heading => heading.title);
+
+    const sections: Omit<DocSection, 'id' | 'vector'>[] = [];
+
+    if (headings.length === 0) {
+      const content = rawContent;
+      sections.push({
+        path: filePath,
+        pageTitle,
+        sectionTitle: 'Overview',
+        sectionSlug: 'overview',
+        sectionOrder: 0,
+        headingLevel: 1,
+        lineStart: 1,
+        lineEnd: lines.length,
+        lineRange: `1-${lines.length}`,
+        content,
+        contentForEmbedding: this.prepareContentForEmbedding(content),
+        contentSummary: this.createSearchResultSummary(content, 300),
+        sections: sectionTitles,
+        fileSize,
+        ...metadata
+      });
+      return sections;
     }
 
-    // Extract all section titles (H2-H6)
-    const sections: string[] = [];
-    for (const line of lines) {
-      const headingMatch = line.match(/^(#{2,6})\s+(.*)$/);
-      if (headingMatch) {
-        sections.push(headingMatch[2].trim());
+    const sectionHeadings = headings.filter(heading => heading.level >= 2);
+
+    if (sectionHeadings.length === 0) {
+      const content = rawContent;
+      sections.push({
+        path: filePath,
+        pageTitle,
+        sectionTitle: 'Overview',
+        sectionSlug: 'overview',
+        sectionOrder: 0,
+        headingLevel: 1,
+        lineStart: 1,
+        lineEnd: lines.length,
+        lineRange: `1-${lines.length}`,
+        content,
+        contentForEmbedding: this.prepareContentForEmbedding(content),
+        contentSummary: this.createSearchResultSummary(content, 300),
+        sections: sectionTitles,
+        fileSize,
+        ...metadata
+      });
+      return sections;
+    }
+
+    const firstSectionStart = sectionHeadings[0].line;
+    if (firstSectionStart > 1) {
+      const overviewContent = lines.slice(0, firstSectionStart - 1).join('\n').trim();
+      if (overviewContent) {
+        sections.push({
+          path: filePath,
+          pageTitle,
+          sectionTitle: 'Overview',
+          sectionSlug: 'overview',
+          sectionOrder: 0,
+          headingLevel: 1,
+          lineStart: 1,
+          lineEnd: firstSectionStart - 1,
+          lineRange: `1-${firstSectionStart - 1}`,
+          content: overviewContent,
+          contentForEmbedding: this.prepareContentForEmbedding(overviewContent),
+          contentSummary: this.createSearchResultSummary(overviewContent, 300),
+          sections: sectionTitles,
+          fileSize,
+          ...metadata
+        });
       }
     }
 
-    // Get full content
-    const content = rawContent;
-    
-    // Classify document
-    const metadata = this.classifyDocument(filePath, content);
-    
-    // Prepare content for embedding (keep code context)
-    const contentForEmbedding = this.prepareContentForEmbedding(content);
-    
-    // Create summary for search results (no code)
-    const contentSummary = this.createSearchResultSummary(content, 300);
+    sectionHeadings.forEach((heading, index) => {
+      const nextHeading = sectionHeadings[index + 1];
+      const lineStart = heading.line;
+      const lineEnd = nextHeading ? nextHeading.line - 1 : lines.length;
+      const content = lines.slice(lineStart - 1, lineEnd).join('\n').trim();
 
-    return {
-      path: filePath,
-      pageTitle,
-      sectionTitle: 'Overview', // Page-level chunk represents the whole page
-      content,
-      contentForEmbedding,
-      contentSummary,
-      sections,
-      fileSize,
-      ...metadata
-    };
+      if (!content) {
+        return;
+      }
+
+      sections.push({
+        path: filePath,
+        pageTitle,
+        sectionTitle: heading.title,
+        sectionSlug: this.slugify(heading.title),
+        sectionOrder: index + 1,
+        headingLevel: heading.level,
+        lineStart,
+        lineEnd,
+        lineRange: `${lineStart}-${lineEnd}`,
+        content,
+        contentForEmbedding: this.prepareContentForEmbedding(content),
+        contentSummary: this.createSearchResultSummary(content, 300),
+        sections: sectionTitles,
+        fileSize,
+        ...metadata
+      });
+    });
+
+    return sections;
+  }
+
+  private extractPageTitle(filePath: string, lines: string[]): string {
+    for (const line of lines) {
+      if (line.startsWith('# ')) {
+        return line.substring(2).trim();
+      }
+    }
+
+    const base = path.basename(filePath, '.md');
+    return base
+      .replace(/[-_]/g, ' ')
+      .replace(/\b\w/g, (char) => char.toUpperCase());
+  }
+
+  private extractHeadings(lines: string[]): ParsedHeading[] {
+    const headings: ParsedHeading[] = [];
+
+    lines.forEach((line, index) => {
+      const headingMatch = line.match(/^(#{1,6})\s+(.*)$/);
+      if (!headingMatch) {
+        return;
+      }
+
+      headings.push({
+        title: headingMatch[2].trim(),
+        level: headingMatch[1].length,
+        line: index + 1
+      });
+    });
+
+    return headings;
+  }
+
+  private slugify(value: string): string {
+    const slug = value
+      .toLowerCase()
+      .replace(/[`"'.,:;!?()[\]{}]/g, '')
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+
+    return slug || 'section';
   }
 
   private classifyDocument(filePath: string, content: string): DocumentMetadata {
