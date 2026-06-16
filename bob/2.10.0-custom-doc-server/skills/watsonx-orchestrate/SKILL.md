@@ -18,20 +18,19 @@ This skill covers typical instructions how to get started with building agents o
 
 ## MCP Documentation Server
 
-Rather than guessing, utilize the MCP Documentation server! MCP Server: 'watsonx-orchestrate-documentation' and the tools: 'search' and 'query_docs'.
+Important: Rather than guessing, you must utilize the MCP documentation server 'watsonx-orchestrate-documentation' and the tools: 'search' and 'query_docs'!
 
 *search*
 
-Search the IBM watsonx Orchestrate ADK documentation to find relevant pages. Returns a list of page links with summaries (NO full content or code). Each result includes: title, link (path for 'query_docs'), category, documentType, summary (brief description without code), hasCodeExamples (boolean), sections (list of section titles), and relevanceScore. 
+Search the watsonx Orchestrate documentation to find relevant content. Returns a list of page links with summaries and meta data (NO full content or code). Use this tool first (before query_docs).
 
 *query_docs*
 
-Read content from pages identified by the 'search' tool. This is a read-only shell-like interface to a virtualized filesystem containing only IBM watsonx Orchestrate documentation. 
+Read content from pages identified by the search tool. This is a read-only shell-like interface to a virtualized filesystem containing only watsonx Orchestrate documentation. 
 
-Typical workflow: 
-1) Use 'search' tool to find relevant pages (returns links like "tools/create_tool"), 
-2) Use 'query_docs' tool to read full content: "cat /tools/create_tool.md" (note: add leading / and .md extension to the link from search results). Returns page content including code examples, API specs, and detailed instructions. 
-Supported commands: cat (read full file), head (read first N lines), tail (read last N lines), rg/grep (search with regex), tree/ls (explore structure), jq (parse JSON). 
+Example workflow: 
+1) search for "Python tool decorator" → get link "tools/create_tool", sectionTitle, and lineRange like "15-45"
+2) query_docs with the suggested command such as "head -n 45 /tools/create_tool.md | tail -n 31"
 
 ## orchestrate CLI
 
@@ -92,7 +91,8 @@ watsonx Orchestrate runs **agents** that route user requests to **tools**, **col
 Follow this order. Dependencies must exist *before* the thing that references them.
 
 ```
-scaffold project → Bootstrap an isolated virtual environment + CLI
+create implementation plan (e.g. by using the 'watsonx-orchestrate-documentation' MCP server)
+   → scaffold project → Bootstrap an isolated virtual environment + CLI
    → write tools (+connections/models/KB) → write agent YAML
    → import connections → import models → import KB → import tools/toolkits
    → import agent → chat-test → debug → re-import → deploy
@@ -177,5 +177,20 @@ e.g. an agent shown as "FM - Aegis" may have `name: FM_3009a0` — `-n "FM - Aeg
 
 # 4. Critical Constraints
 
+**Models**
 - List what the active environment offers: orchestrate models list.
 - Reference models in agent YAML by their full id, e.g. watsonx/meta-llama/llama-3-3-70b-instruct or a gateway provider like groq/openai/gpt-oss-120b.
+- Use groq/openai/gpt-oss-120b by default unless something else is specified.
+
+**Python tools**
+- ✅ Every callable that becomes a tool **must** be decorated with `@tool`.
+- ✅ Use **Google-style docstrings**: a summary, then `Args:` (each as `name (Type): desc`), then `Returns:` (`Type: desc`). **No blank line between the `Args:` and `Returns:` blocks** — extra blanks break the parser.
+- ✅ Every parameter and the return value **must have type hints**, matching the docstring.
+- ✅ Each tool file must be **self-contained**: only stdlib, common third-party (`requests`, `pydantic`, …), and `ibm_watsonx_orchestrate` imports. **No cross-file local imports** (`from .utils import x` / `from tools.shared import y`).
+- ✅ Credentials are **never** function parameters. Declare `expected_credentials=[…]` on `@tool` and fetch at runtime via `ibm_watsonx_orchestrate.run.connections`.
+- ✅ Define Pydantic models as explicit classes — never `type(...)` dynamic creation.
+
+**Agent YAML**
+- ✅ `spec_version: v1` and `kind: native` are mandatory — omitting them fails import.
+- ✅ `tools`/`collaborators`/`knowledge_base` list resources **by name**; the referenced resources must already be imported.
+- ✅ `toolkits` are only valid for `experimental_customer_care` style (and the schedulable-agent exception).

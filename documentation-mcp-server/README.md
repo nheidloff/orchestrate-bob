@@ -15,9 +15,8 @@ Use this tool FIRST. Then read only the suggested line range with query_docs to 
 small and precise. 
 
 Example workflow: 
-1) search for "Python tool decorator" → get link "tools/create_tool", sectionTitle, and 
-lineRange like "15-45", 
-2) query_docs with the suggested command such as "head -n 45 /tools/create_tool.md | tail -n 31".
+1) search for "Python tool decorator" → get link "tools/create_tool", sectionTitle, and lineRange like "15-45"
+2) query_docs with the suggested command such as "head -n 45 /tools/create_tool.md | tail -n 31"
 ```
 
 Example output:
@@ -42,6 +41,7 @@ Example output:
 ]
 ```
 
+
 ## Tool: query_docs
 
 ```text
@@ -51,7 +51,7 @@ Orchestrate ADK documentation (markdown files and OpenAPI specs). NOT a real
 shell - nothing runs on any machine.
 
 Typical workflow:
-1) use search to find the best matching section.
+1) use search to find the best matching section,
 2) copy the returned suggestedReadCommand or use the returned lineRange to 
    read only that slice
 3) expand to nearby lines only if needed. Prefer bounded reads over full-file 
