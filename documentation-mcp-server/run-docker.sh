@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # Configuration
-IMAGE_NAME="watsonx-doc-mcp-server"
-CONTAINER_NAME="watsonx-doc-mcp"
+IMAGE_NAME="watsonx-orchestrate-documentation-mcp-server"
+CONTAINER_NAME="watsonx-orchestrate-documentation-mcp-server"
 PORT=3033
 
 # Check if Docker is running
@@ -13,7 +13,7 @@ if ! docker info >/dev/null 2>&1; then
 fi
 
 echo "🔨 Building Docker image: ${IMAGE_NAME}..."
-docker build -t ${IMAGE_NAME} .
+docker build --no-cache --load -t ${IMAGE_NAME} .
 
 if [ $? -ne 0 ]; then
     echo "❌ Docker build failed!"
