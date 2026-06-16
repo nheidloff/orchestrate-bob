@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "watsonx-orchestrate-adk-docs": {
+      "type": "streamable-http",
+      "url": "http://localhost:3033/mcp",
+      "alwaysAllow": [
+        "search",
+        "query_docs"
+      ],
+      "disabled": false
+    }
+  }
+}

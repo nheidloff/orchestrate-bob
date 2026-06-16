@@ -1,9 +1,6 @@
-bob/2.10.0-custom-doc-server
-
 cli-documentation/cli
 cli-documentation/mcp_server
 
-documentation-mcp-server
 documentation-mcp-server/node_modules/
 documentation-mcp-server/dist/
 documentation-mcp-server/.cache/
