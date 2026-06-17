@@ -1,6 +1,6 @@
 # orchestrate-bob
 
-This repo contains **experiments** how to customize AI-based software development tools like IBM Bob to access IBM watsonx Orchestrate.
+This repo contains **experiments** how to customize AI-based software development tools like IBM Bob to access IBM watsonx Orchestrate v2.10.0.
 
 
 ## Usage

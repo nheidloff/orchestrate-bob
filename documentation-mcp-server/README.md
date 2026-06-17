@@ -74,6 +74,9 @@ paths or chain commands with &&. Output truncated to 30KB per call.
 Terminal 1:
 
 ```bash
+git clone https://github.com/nheidloff/orchestrate-bob.git
+cd documentation-mcp-server
+./download-documentation.sh
 ./run-docker.sh
 ```
 
