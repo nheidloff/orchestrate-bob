@@ -1,30 +1,68 @@
 # orchestrate-bob
 
-This repo contains **experiments** how to customize AI-based software development tools like IBM Bob to access IBM watsonx Orchestrate v2.10.0.
+This repo contains utilities to access IBM watsonx Orchestrate from agentic software development tools like IBM Bob. 
 
+There are two components:
 
-## Usage
+1. [Skill to access watsonx Orchestrate](#watsonx-orchestrate-skill)
+2. [Experiment how to write documentation MCP servers](#watsonx-orchestrate-documentation-mcp-server)
 
-Copy [bob/2.10.0-official-doc-server/](bob/2.10.0-official-doc-server/) or [bob/2.10.0-custom-doc-server/](bob/2.10.0-custom-doc-server/) in you '.bob' directory.
-
-See blog posts:
-
-* [Accessing watsonx Orchestrate from Bob via CLI](https://heidloff.net/article/watsonx-orchestrate-skill-cli/)
-* [Testing watsonx Orchestrate Agents with Bob](https://heidloff.net/article/watsonx-orchestrate-skill-testing/)
-* [Developing Documentation MCP Servers for IBM Bob](https://heidloff.net/article/develop-documentation-mcp-servers/)
+The agentic assets in this repo have been created by developers in the community.
 
 
 ## watsonx Orchestrate Skill
 
-The repo contains a [watsonx Orchestrate skill](bob/2.10.0-official-doc-server/):
+The [watsonx-orchestrate](skills/watsonx-orchestrate) skill provides several functions:
 
 - Describes main Orchestrate assets and defines the lifecycle of creating agents
-- Documents how to invoke the 'orchestrate' CLI and when to use the documentation MCP server
-- Documents how to import and test generated agents running in the local Orchestrate Developer Edition
+- Explains how to build assets, tools, etc. with the ADK (Agent Development Kit)
+- Knows how to set up the local 'orchestrate' CLI (Command Line Interface)
+- Understands how to invoke the 'orchestrate' CLI and how to use the documentation MCP (Model Context Protocol) server
+- Can import assets and run tests against Orchestrate environments
+- Knows how to invoke the watsonx Orchestrate APIs
+- Helps to embed the watsonx Orchestrate Chat widget in custom applications
+- Plus much more ...
 
-Thanks go to [Florin Manaila](https://de.linkedin.com/in/funmachines) for creating the core skill!
+The skill supports the watsonx Orchestrate ADK v2.10.0.
+
+Thanks go to [Florin Manaila](https://de.linkedin.com/in/funmachines) for creating most of the skill and the contributions from [Jan Forster](https://www.linkedin.com/in/1janforster/)!
+
+**Setup**
+
+Copy [skills/watsonx-orchestrate/](skills/watsonx-orchestrate/) in your '.bob/skills/watsonx-orchestrate/' directory.
+
+Put this in '.bob/mcp.json':
+
+```json
+{
+  "mcpServers": {
+    "watsonx-orchestrate-adk-docs": {
+      "type": "streamable-http",
+      "url": "https://developer.watson-orchestrate.ibm.com/mcp",
+      "disabled": false
+    }
+  }
+}
+```
 
 
-## watsonx Orchestrate MCP Server
+## watsonx Orchestrate Documentation MCP Server
 
 The folder [documentation-mcp-server](documentation-mcp-server) contains an alternative implementation of the official watsonx Orchestrate MCP server.
+
+**Setup**
+
+See [README.md](documentation-mcp-server/README.md) for setup instructions.
+
+
+## Documentation
+
+See blog posts:
+
+* [New Agentic Skill for watsonx Orchestrate](https://heidloff.netarticle/watsonx-orchestrate-skill/)
+* [Accessing Orchestrate Environments via Agentic Skill](https://heidloff.net/article/watsonx-orchestrate-skill-environment/)
+* [Testing Conversations in Orchestrate via Agentic Skill](https://heidloff.net/article/watsonx-orchestrate-skill-multi-turn-tests/)
+* [Developing Documentation MCP Servers for IBM Bob](https://heidloff.net/article/develop-documentation-mcp-servers/)
+* [Accessing watsonx Orchestrate from Bob via CLI](https://heidloff.net/article/watsonx-orchestrate-skill-cli/)
+* [Testing watsonx Orchestrate Agents with Bob](https://heidloff.net/article/watsonx-orchestrate-skill-testing/)
+* [Watsonx Orchestrate Debug Skill for IBM Bob](https://heidloff.net/article/bob-debug-orchestrate/)
