@@ -23,9 +23,9 @@ The [watsonx-orchestrate](skills/watsonx-orchestrate) skill provides several fun
 - Helps to embed the watsonx Orchestrate Chat widget in custom applications
 - Plus much more ...
 
-The skill supports the watsonx Orchestrate ADK v2.10.0.
+The skill supports the watsonx Orchestrate ADK v2.12.0.
 
-Thanks go to [Florin Manaila](https://de.linkedin.com/in/funmachines) for creating most of the skill and the contributions from [Jan Forster](https://www.linkedin.com/in/1janforster/)!
+Thanks go to [Florin Manaila](https://de.linkedin.com/in/funmachines) for creating most of the skill! 
 
 **Setup**
 
@@ -60,8 +60,8 @@ See [README.md](documentation-mcp-server/README.md) for setup instructions.
 See blog posts:
 
 * [New Agentic Skill for watsonx Orchestrate](https://heidloff.netarticle/watsonx-orchestrate-skill/)
-* [Accessing Orchestrate Environments via Agentic Skill](https://heidloff.net/article/watsonx-orchestrate-skill-environment/)
-* [Testing Conversations in Orchestrate via Agentic Skill](https://heidloff.net/article/watsonx-orchestrate-skill-multi-turn-tests/)
+* [Accessing watsonx Orchestrate Environments via Agentic Skill](https://heidloff.net/article/watsonx-orchestrate-skill-environment/)
+* [Testing multi-turn Conversations in watsonx Orchestrate via Agentic Skill](https://heidloff.net/article/watsonx-orchestrate-skill-multi-turn-tests/)
 * [Developing Documentation MCP Servers for IBM Bob](https://heidloff.net/article/develop-documentation-mcp-servers/)
 * [Accessing watsonx Orchestrate from Bob via CLI](https://heidloff.net/article/watsonx-orchestrate-skill-cli/)
 * [Testing watsonx Orchestrate Agents with Bob](https://heidloff.net/article/watsonx-orchestrate-skill-testing/)

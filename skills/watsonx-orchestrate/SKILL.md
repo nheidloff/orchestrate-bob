@@ -21,13 +21,16 @@ Authoritative, end-to-end guide for delivering production agents on IBM watsonx
 Orchestrate with the Agent Development Kit (ADK). It is grounded in the real ADK
 source and CLI (`ibm-watsonx-orchestrate`), not guesswork.
 
-> **Golden rule:** the ADK changes fast. The CLI specifics here were verified
-> against **`ibm-watsonx-orchestrate` 2.10.0**. When a command, flag, or YAML
-> field is uncertain — or you're on a different version — **verify against the
-> live tool** with `orchestrate <group> --help` and
+> **Golden rule:** the ADK changes fast. The CLI specifics here were
+> **live-verified against `ibm-watsonx-orchestrate` 2.12.0** (IBM Cloud SaaS,
+> 2026-06-29). When a command, flag, or YAML field is uncertain — or you're on a
+> different version —
+> **verify against the live tool** with `orchestrate <group> --help` and
 > `orchestrate <group> <cmd> --help` before running it. Treat third-party blog
 > syntax as approximate; trust `--help` and this skill's references. Check your
 > version with `orchestrate --version` / `pip show ibm-watsonx-orchestrate`.
+> Upgrade with `pip install -U ibm-watsonx-orchestrate` (needs Python ≥3.11,
+> <3.15; 2.11+ adds Python 3.14 support).
 
 ---
 
@@ -35,6 +38,8 @@ source and CLI (`ibm-watsonx-orchestrate`), not guesswork.
 - Always run the script `source ./.bob/skills/watsonx-orchestrate/references/setup-venv.sh` 
   before doing anything else and before running the `orchestrate` CLI!
 - After code generation always deploy/import and runs tests (see 3.5 Test)
+
+---
 
 ## 1. Mental model — what you are building
 
@@ -191,7 +196,7 @@ instructions: >
   You are a helpful weather assistant. When the user asks about weather,
   call the get_weather tool with the city name and present the result clearly.
 llm: watsonx/meta-llama/llama-3-3-70b-instruct   # example only — pick one that EXISTS in `orchestrate models list` (§4)
-style: default                                    # default | react | planner
+style: react_intrinsic                            # 2.12.0 default; `default` & `react` are DEPRECATED (omit to take the default)
 tools:
   - get_weather
 starter_prompts:
@@ -212,6 +217,79 @@ recommended: `instructions`, `llm`, `style`, `tools`, plus `starter_prompts` /
 `welcome_content` for UX. Full field reference (collaborators, knowledge_base,
 guidelines, structured_output, chat_with_docs, voice, channels) is in
 **[references/agents-tools-schemas.md](references/agents-tools-schemas.md)**.
+
+### 3.3a Production-grade agent fields (ADK 2.11+, verify before relying on)
+
+For long-running or recurring agents, add these optional blocks (sourced from the
+ADK docs — confirm with `orchestrate agents create --help` / the schema reference):
+
+```yaml
+# Conversation compaction — prevents context overflow in long chats
+compaction_settings:
+  context_compaction_enabled: true
+  context_compaction_threshold: 20000   # tokens that trigger Level-1 compaction
+  compaction_sliding_window: 10         # most-recent messages kept verbatim
+  large_message_threshold: 50000        # token size that marks a "large" message
+  large_message_chunk_size: 30000
+  large_message_target_summary: 10000
+  large_message_detect_structured: true
+
+# Per-agent LLM decoding params (greedy/temperature, limits, response format, …)
+llm_config:
+  temperature: 0
+  max_tokens: 2048
+  # top_p / top_k / seed / response_format / reasoning_effort / provider extensions
+
+is_schedulable: true     # enables recurring runs; internal scheduling tools auto-appear
+# restrictions: …        # access restrictions (see schema reference)
+```
+
+### 3.3b Orchestrator / multi-agent (collaborators) — live-verified 2.12.0
+
+A native agent becomes an **orchestrator (supervisor)** that uses *other agents as
+agents* by listing them under `collaborators:`. wxO's multi-agent pattern:
+
+```yaml
+name: dr_house_advise
+style: react_intrinsic          # supports collaborators (experimental_customer_care does NOT)
+tools:                          # the orchestrator can still call its own tools
+  - differential_diagnosis
+collaborators:                  # other agents, by snake_case name — imported FIRST
+  - dr_wilson                   # oncology specialist agent
+  - dr_cuddy                    # administration agent
+  - dr_foreman                  # neurology agent
+```
+
+How it works (verified end-to-end):
+- **Import/deploy collaborators *before* the orchestrator** (they're dependencies).
+  Deploy all of them on SaaS so runtime delegation can reach them.
+- At runtime wxO auto-generates a **`chat_with_collaborator_<name>`** tool on the
+  orchestrator. The router picks a collaborator the same way it picks a tool —
+  **from the collaborator's `description`.** So collaborator descriptions must be
+  **distinct and routing-friendly** (lead with the specialty/trigger). The orchestrator
+  then frames the collaborator's reply in its own voice.
+- Delegation is visible in the run `step_history` as a `tool_calls` step named
+  `chat_with_collaborator_<name>` (e.g. an oncology question routed to `dr_wilson`,
+  an approval question to `dr_cuddy` — confirmed in the `test/` project).
+- Collaborators are themselves full agents (own tools/KB/collaborators) — **nesting
+  works**: live-verified a 3-level chain House → Foreman → Chase where the mid-tier agent
+  (Foreman) used its *own* tool AND sub-delegated. The whole nested chain (sub-agent tool
+  calls + sub-delegations) is flattened into the top-level run's `step_history`.
+- An agent **cannot list itself** as a collaborator (circular reference rejected).
+
+> **Routing tip:** if delegation goes to the wrong agent (or the orchestrator answers
+> itself instead of delegating), tighten the collaborator `description`s and name the
+> routing rules explicitly in the orchestrator's `instructions` — same discipline as
+> getting a tool to fire.
+
+⚠ **Scheduling caveats (live-verified 2.12.0):**
+- `is_schedulable: true` set in YAML **did not persist** — import succeeded but the
+  round-trip export came back `is_schedulable: false`. Scheduling needs to be **enabled
+  at the tenant level first** (per the platform "enable scheduling" step); the YAML flag
+  alone silently resets. Verify with an export round-trip; don't assume it stuck.
+- Once enabled, internal scheduling tools are **visible and deletable via the ADK CLI**
+  (known issue) — don't remove them by hand.
+- Schedules themselves are created conversationally in chat, not in YAML.
 
 ### 3.4 Import (dependency-ordered)
 
@@ -266,7 +344,7 @@ orchestrate agents list -v                              # full JSON incl. ids
 until it has been tested — or the human explicitly declined. 
 
 To test the agent, Orchestrate assets have to be imported/deployed first: 
-Run `import-all.sh'.
+Run `import-all.sh`.
 
 After deploy, **ask first**, then prove it works:
 
@@ -293,12 +371,16 @@ Run the MCP server `watsonx-orchestrate-adk` tool `chat_with_agent` for single-t
 
 #### 2. `watsonx-orchestrate-adk` MCP server is not available
 ```bash
-# Turn 1 — single-turn
-./.bob/skills/watsonx-orchestrate/references/wxo-chat.sh -n <agent> "<derived prompt>"
+# Single-turn (1)
+./.bob/skills/watsonx-orchestrate/references/wxo-chat.sh -n <agent> "<derived single-turn prompt>"
 # → { "thread_id": "3f92692d-...", "final_message": "...", ... }
 
-# Turn 2 — resume
-./.bob/skills/watsonx-orchestrate/references/wxo-chat.sh -n <agent> --thread-id <thread-id> -r "<derived prompt>"
+# Multi-turn (2a) — initial user input
+./.bob/skills/watsonx-orchestrate/references/wxo-chat.sh -n <agent> "<derived multi-turn prompt>"
+# → { "thread_id": "3f92692d-...", "final_message": "...", ... }
+
+# Multi-turn (2b) — resume
+./.bob/skills/watsonx-orchestrate/references/wxo-chat.sh -n <agent> --thread-id <thread-id> -r "<second user input>"
 # → { "thread_id": "3f92692d-...", "final_message": "...", "reasoning_trace": {"steps": [...]}, ... }
 ```
 
@@ -328,6 +410,11 @@ record that the human declined) before §7 handover.**
   or a gateway provider like `groq/openai/gpt-oss-120b`.
 - Use `groq/openai/gpt-oss-120b` as default model if available.
 - The `experimental_customer_care` agent style expects `groq/openai/gpt-oss-120b`.
+- **Premier models are now disabled by default (2.12+)** — enable explicitly before
+  referencing one, or `models list` won't surface it.
+- Prebuilt **domain agents are multi-provider**: `gpt-oss-120b` via Groq on
+  AWS/IBM Cloud, via watsonx.ai on on-prem/GovCloud — pick the id that `models list`
+  actually shows for your deployment.
 - To add your own watsonx.ai model you create a `watsonx_credentials` connection,
   then a `kind: model` YAML, then `orchestrate models import`. Full walkthrough
   (provider schema, space/project/deployment, CPD on-prem) is in
@@ -383,7 +470,7 @@ Remember: After code generation always deploy/import and runs tests (see 3.5 Tes
 |---------|--------------------|
 | `agents import` fails on required field | Missing `spec_version`/`kind`/`name`/`description`, or a referenced tool/KB not imported yet. Import dependencies first. |
 | Tool imports but agent never calls it | Vague tool `description`/docstring, or instructions don't mention it. Make the docstring action-oriented; name the tool in `instructions`. |
-| Type-hint / docstring parser warnings | Missing type hints or a blank line between `Args:` and `Returns:`. Fix the Google-style docstring (§5). |
+| Type-hint / docstring parser warnings | **First check it's not a false positive.** In ADK 2.12 `tools import` prints `"Unable to properly parse parameter descriptions due to missing or incorrect type hints"` for *every* Python tool — even correct ones (the descriptions still parse fine; live-verified). Only act if the parsed schema is actually missing descriptions. *Real* causes: missing type hints, or a blank line between `Args:` and `Returns:` (§5). |
 | "name cannot contain spaces" | Tool/toolkit/agent `name` must be snake_case, no spaces. |
 | Missing dependency at tool runtime | Add it to the tool's `requirements.txt` and re-import with `-r` (never add `ibm-watsonx-orchestrate`). |
 | 401/403 on a tool call | Connection not configured/credentialed, or wrong `app_id`. `orchestrate connections list`; re-run `set-credentials`. |
@@ -426,6 +513,27 @@ Keep **one** set of YAML/Python artifacts; only connection **credentials** and
 model `provider_config` differ per environment. Version the artifacts in Git and
 treat `import-all.sh` as the source of truth for promotion across dev → SaaS/on-prem.
 `orchestrate channels` exposes a deployed agent on channels such as embedded web chat.
+
+### Embedded web chat (the channel for chat_with_docs uploads)
+
+Generate a drop-in `<script>` snippet for a **deployed** agent:
+```bash
+orchestrate channels webchat embed --agent-name <agent> --env live   # or draft
+```
+Paste the snippet into a page with a `<div id="root">`; it loads
+`<hostURL>/wxochat/wxoLoader.js?embed=true` and renders the launcher. This is the
+**right surface for `chat_with_docs`** — the upload widget here triggers ingestion,
+which the raw runs API does not (§8).
+
+⚠ **CRN gotcha (live-verified 2.12.0 SaaS):** the command auto-fetches the instance CRN
+from the IBM Cloud resource-controller, which **403s with an instance-scoped API key**
+and then prompts interactively (aborts in scripts). The CRN is in the bearer token's
+`unique_instance_crns` claim — extract it and pipe it in:
+```bash
+CRN=$(python -c "import yaml,os,json,base64;t=yaml.safe_load(open(os.path.expanduser('~/.cache/orchestrate/credentials.yaml')))['auth']['<env>']['wxo_mcsp_token'];p=t.split('.')[1];p+='='*(-len(p)%4);print(json.loads(base64.urlsafe_b64decode(p))['unique_instance_crns'][0])")
+echo "$CRN" | orchestrate channels webchat embed --agent-name <agent> --env live
+```
+A working example page is in the test project: `test/webchat/dr_house_docs_webchat.html`.
 
 ---
 
@@ -486,7 +594,7 @@ conceptual queries. Use query_docs_filesystem_ibm_watsonx_orchestrate_adk when y
 need exact keyword/regex matching, structural exploration, or to read the full content 
 of a specific page by path.
 
-**2. MCP orchestrate ADK***
+**2. MCP orchestrate ADK**
 Gives Bob direct access to all commands within the watsonx Orchestrate ADK.
 MCP Server: `watsonx-orchestrate-adk` with tools like `chat_with_agent`, `list_agents`, 
   `list_tools`, `list_toolkits`, `list_connections`, `list_models`, `export_agent`, 
@@ -504,6 +612,7 @@ MCP Server: `watsonx-orchestrate-adk` with tools like `chat_with_agent`, `list_a
 | [references/mcp-toolkits.md](references/mcp-toolkits.md) | Importing MCP servers as toolkits; building MCP servers for tools; the wxO MCP servers |
 | [references/runtime-api-embedding.md](references/runtime-api-embedding.md) | Consuming a deployed agent from your app via the runtime REST API (`/chat/completions`, `/orchestrate/runs`, streaming, model-only completions); auth, base URLs, `thread_id` multi-turn, app-backend proxy pattern |
 | [references/testing-debugging.md](references/testing-debugging.md) | Post-deploy verification gate (test before handover) + report template, evaluations, programmatic flow testing, failure-mode table |
+| [references/agentops-evaluations.md](references/agentops-evaluations.md) | **AgentOps**: the `[agentops]` extra, the `evaluations` CLI (generate/quick-eval/evaluate/analyze/validate/red-teaming), input formats (TSV/CSV/config), end-to-end eval workflow, and observability traces |
 | [references/setup-venv.sh](references/setup-venv.sh) | Creates virtual Python environment with `orchestrate` CLI |
 | [references/wxo-chat.sh](references/wxo-chat.sh) | Tests single-turn and multi-turn conversations with agents if the MCP server `watsonx-orchestrate-adk` is not available |
 
@@ -517,5 +626,11 @@ When you need a pattern this skill doesn't spell out, fetch a matching example
 from the public `examples/` directory rather than inventing one.
 
 **Always prefer live `orchestrate ... --help` over memory when a flag is in doubt.**
-This skill's CLI specifics were verified against `ibm-watsonx-orchestrate` 2.10.0
-and a live IBM Cloud SaaS instance.
+This skill's CLI specifics were live-verified against `ibm-watsonx-orchestrate` on a
+live IBM Cloud SaaS instance — most recently **2.12.0 (2026-06-29)**, building the
+`dr_house_advise` agent end-to-end (build → import → single/multi-turn chat → export →
+reimport → observability), a `house_triage` **flow** (parallel + decision + masking,
+compiled and imported), and an **AgentOps** `validate-native` run — plus the 2.11–2.12
+schema additions (compaction, `llm_config`, `restrictions`). Evidence in the `test/`
+folder. The flow `decisions` table, callbacks, timer, and voice Flux remain
+release-notes-sourced (not yet exercised live).

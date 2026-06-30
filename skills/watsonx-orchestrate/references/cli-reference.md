@@ -1,15 +1,31 @@
 # `orchestrate` CLI reference
 
-Verified against **`ibm-watsonx-orchestrate` 2.10.0**. The CLI evolves —
-**always confirm with `orchestrate <group> --help` and
-`orchestrate <group> <cmd> --help`**. Short flags are shown in `()`.
+Verified against **`ibm-watsonx-orchestrate` 2.12.0** (groups/commands confirmed live;
+original catalog from 2.10.0). The CLI evolves — **always confirm with
+`orchestrate <group> --help` and `orchestrate <group> <cmd> --help`**. Short flags are
+shown in `()`.
 
-Top-level groups (2.10.0):
+Top-level groups:
 `env`, `agents`, `tools`, `toolkits`, `knowledge-bases`, `connections`,
 `models`, `server`, `chat`, `channels`, `settings`, `evaluations`,
 `observability`, `voice-configs`, `phone`, `partners`, `workspaces`.
 
-> Note the plural **`toolkits`** and **`voice-configs`** group names in 2.10.0.
+> Note the plural **`toolkits`** and **`voice-configs`** group names.
+
+> **2.11–2.12 additions (from release notes, not yet live-verified — confirm with
+> `--help`):**
+> - **Scheduling:** agents/flows support recurring runs via `is_schedulable` in YAML
+>   (internal scheduling tools then auto-appear); schedules themselves are created
+>   conversationally in chat, not via a dedicated CLI verb.
+> - **Custom / LangGraph agents (GA):** create and import custom agents from files
+>   via `agents create` / `agents import`, including **mapping connections during
+>   import from a ZIP** (look for a config/experimental-config flag on `agents
+>   import --help`). LangGraph agents gained checkpointing + context variables.
+> - **Compaction & per-agent decoding:** new `compaction_settings` / `llm_config`
+>   YAML blocks (see agents-tools-schemas.md) — set in YAML, imported as usual.
+> - **MCP toolkit export** and **dynamic KB schemas** were added around 2.10.
+> - **Voice:** Deepgram **Flux** models (Flux General English is the new default,
+>   Flux Multilingual, Nova-3 Medical) selectable in `voice-configs`.
 
 ---
 
@@ -222,5 +238,5 @@ orchestrate chat ask -n weather_agent "And tomorrow?" -t <thread_id>   # continu
 - **evaluations**: `evaluate`, `quick-eval`, `generate`, `analyze`, `record`, `validate-native`, `validate-external`, `red-teaming` (see testing-debugging.md).
 - **observability**: `traces` and related — inspect agent execution traces.
 - **settings**: configure the active env, including observability/Langfuse tracing.
-- **voice-configs** / **phone**: voice-enabled agents (`import`, `list`, `get`, `export`, `remove`).
+- **voice-configs** / **phone**: voice-enabled agents (`import`, `list`, `get`, `export`, `remove`). 2.11+ adds Deepgram **Flux** STT models (Flux General English is the new default).
 - **partners**: catalog/offering publishing. **workspaces**: multi-workspace management.

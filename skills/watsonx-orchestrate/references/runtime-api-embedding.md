@@ -21,6 +21,10 @@ your application to own the UX and call the agent like any other backend service
 - **SaaS / on-prem:** the same **API service URL** you registered in §2a (the one
   containing `/instances/<id>`), with `/v1` appended — e.g.
   `https://api.<region>.watson-orchestrate.cloud.ibm.com/instances/<INSTANCE_ID>/v1`.
+  **Live-verified (2.12.0, us-south):** the runtime paths are under `/v1/orchestrate/…`
+  on SaaS — `GET <base>/v1/orchestrate/agents` → 200, `POST <base>/v1/orchestrate/runs`
+  → 200; the bare `/v1/agents` and `/v1/runs` return **404** (`WXO-PROXY-14009E`). Do not
+  drop the `/orchestrate` segment on SaaS.
 
 **Auth** = `Authorization: Bearer <token>` on every request.
 - **Local:** read the token the Developer Edition already minted:
@@ -155,3 +159,32 @@ Checklist:
 > When something here isn't spelled out (exact SaaS path, a body field, new
 > events), query **`wxo-docs`** (`SearchIbmWatsonxOrchestrateAdk`) rather than
 > guessing — runtime APIs change faster than this skill.
+
+---
+
+## 8. 2026 runtime/observability updates (verify per environment)
+
+- **Standardized error responses** — all proxy errors now return a consistent JSON
+  shape with **machine-readable error codes** and a **transaction ID**. Log the
+  transaction ID and switch on the stable error code instead of parsing message
+  strings; surface the id in your app's error reporting for support/troubleshooting.
+- **Context compaction at the API level** — long-running conversations can overflow
+  the context window. Enable compaction via the agent config (`compaction_settings`,
+  see [agents-tools-schemas.md](agents-tools-schemas.md)) so multi-turn `thread_id`
+  conversations summarize automatically (default threshold ~20,000 tokens) rather
+  than failing.
+- **AgentOps v3 traces** — retrieve execution traces via
+  `GET v1/agentops-v3/traces/{trace_id}`. Context-variable changes are now tracked
+  per node; client apps can also consume intermediate context updates through
+  embedded-chat runtime events. Use this for production debugging of agentic
+  workflows instead of the run `step_history` alone.
+- **Sensitive-data masking** — values marked sensitive in a flow are masked in chat
+  history, the flow inspector, and traces; don't expect to read them back from the
+  trace/run output.
+- **File upload (chat_with_docs / file-upload agents)** — `POST <base>/v1/orchestrate/upload-to-s3`
+  (multipart: `files=<file>`, `data={text, fileMetaData}`) → returns COS presigned
+  URLs. ⚠ The ADK `RunClient.upload_file_to_s3` posts to `/v1/upload-to-s3/` on cloud →
+  **404**; use `/v1/orchestrate/upload-to-s3` (no trailing slash) → 200. **Note:** even
+  with a valid upload, `chat_with_docs` agents did **not** read the file via
+  `/v1/orchestrate/runs` in testing — that feature is wired for the chat-UI/web-chat
+  upload widget. For programmatic document RAG, use a `knowledge_base` instead.

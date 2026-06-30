@@ -177,32 +177,21 @@ if [[ -n "$TOKEN_EXPIRY" ]]; then
 fi
 
 # ─── Build API endpoints ──────────────────────────────────────────────────────────
-# BaseWXOClient sets base_url to:
-#   local dev → <wxo_url>/v1          (plain /v1)
-#   cloud/CPD → <wxo_url>/v1/orchestrate
+# Both local Developer Edition AND IBM Cloud SaaS use the SAME runtime paths:
+#   runs    → <wxo_url>/v1/orchestrate/runs   (async; poll /v1/orchestrate/runs/{run_id})
+#   agents  → <wxo_url>/v1/orchestrate/agents
+#   threads → <wxo_url>/v1/threads
 #
-# Then each client appends its own base_endpoint prefix:
-#   RunClient:     /orchestrate/runs  (local)  OR  /runs  (cloud)
-#   ThreadsClient: /threads           (always)
-#   AgentClient:   /orchestrate/agents (local) OR  /agents (cloud)
-#
-# Net result for each endpoint:
-#   local:  runs    → <wxo_url>/v1/orchestrate/runs
-#           threads → <wxo_url>/v1/threads
-#           agents  → <wxo_url>/v1/orchestrate/agents
-#   cloud:  runs    → <wxo_url>/v1/runs
-#           threads → <wxo_url>/v1/threads
-#           agents  → <wxo_url>/v1/agents
+# LIVE-VERIFIED 2026-06-29 against IBM Cloud SaaS (us-south, ADK 2.12.0):
+#   GET <instance-url>/v1/orchestrate/agents → 200
+#   GET <instance-url>/v1/agents            → 404  (WXO-PROXY-14009E)
+# An earlier version of this script used /v1/agents + /v1/runs for cloud — that 404s.
+# Do not reintroduce a local-vs-cloud split here.
 
-if [[ "$WXO_URL" =~ ^http://(localhost|127\.|0\.0\.0\.0|\[::1\]|host\.docker\.internal) ]]; then
-  RUNS_ENDPOINT="${WXO_URL}/v1/orchestrate/runs"
-  AGENTS_ENDPOINT="${WXO_URL}/v1/orchestrate/agents"
-else
-  RUNS_ENDPOINT="${WXO_URL}/v1/runs"
-  AGENTS_ENDPOINT="${WXO_URL}/v1/agents"
-fi
+RUNS_ENDPOINT="${WXO_URL}/v1/orchestrate/runs"
+AGENTS_ENDPOINT="${WXO_URL}/v1/orchestrate/agents"
 
-# Threads endpoint is always /v1/threads (regardless of local vs cloud)
+# Threads endpoint is /v1/threads (regardless of local vs cloud)
 THREADS_ENDPOINT="${WXO_URL}/v1/threads"
 
 # ─── Resolve agent name → agent ID ───────────────────────────────────────────────
@@ -356,16 +345,23 @@ PYEOF
   exit 1
 fi
 
-# ─── Fetch thread messages ────────────────────────────────────────────────────────
+# ─── Extract the assistant message from the run result ────────────────────────────
+# The polled run result already carries the assistant reply at result.data.message
+# (with content + step_history). Use it directly. (Earlier versions fetched
+# ${THREADS_ENDPOINT}/${THREAD_ID}/messages, which 404s on IBM Cloud SaaS —
+# LIVE-VERIFIED 2026-06-29, ADK 2.12.0.) We write it as a single-element list so the
+# downstream extractor (which expects a messages array) works unchanged.
 
 MESSAGES_FILE="${_TMPDIR}/messages.json"
 
-curl -sf \
-  -H "Authorization: Bearer ${TOKEN}" \
-  -H "Content-Type: application/json" \
-  "${THREADS_ENDPOINT}/${THREAD_ID}/messages" \
-  -o "$MESSAGES_FILE" \
-  || die "Failed to fetch messages for thread_id=${THREAD_ID}"
+python3 - "$STATUS_FILE" "$MESSAGES_FILE" <<'PYEOF'
+import sys, json
+with open(sys.argv[1]) as f:
+    run = json.load(f)
+msg = run.get("result", {}).get("data", {}).get("message", {})
+with open(sys.argv[2], "w") as f:
+    json.dump([msg] if msg else [], f)
+PYEOF
 
 # ─── Extract and emit structured JSON output ─────────────────────────────────────
 
@@ -450,14 +446,18 @@ if include_reasoning:
                 if stype == "tool_calls":
                     tool_calls = []
                     for tc in detail.get("tool_calls", []):
+                        # Two shapes seen in the wild:
+                        #   SaaS runs API: {"name": ..., "args": {...}}
+                        #   OpenAI-style:  {"function": {"name": ..., "arguments": "..."}}
                         fn   = tc.get("function", {})
-                        args = fn.get("arguments")
+                        name = tc.get("name") or fn.get("name")
+                        args = tc.get("args", fn.get("arguments"))
                         try:
                             args = json.loads(args) if isinstance(args, str) else args
                         except (json.JSONDecodeError, TypeError):
                             pass
                         tool_calls.append({
-                            "tool":      fn.get("name"),
+                            "tool":      name,
                             "arguments": args,
                             "agent":     detail.get("agent_display_name"),
                         })

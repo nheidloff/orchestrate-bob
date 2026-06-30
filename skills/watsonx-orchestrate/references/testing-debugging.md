@@ -18,14 +18,29 @@ orchestrate chat ask -n weather_agent "What's the weather in Paris?" -r
 #   -l / --capture-logs        capture execution logs (custom agents)
 #   -t / --thread-id <id>      continue an existing conversation
 ```
+> ⚠ **On IBM Cloud SaaS, `chat ask` can hang** (drops into interactive mode / waits on
+> stdin and produces no output) — live-observed 2.12.0. For scripted/CI testing against
+> SaaS use the runtime API (`/v1/orchestrate/runs`) or `wxo-chat.sh` instead; `chat ask`
+> is most reliable against the local Developer Edition.
 
 Snapshot a known-good definition into version control:
 ```bash
+# Agent → YAML. Reimports directly (orchestrate agents import -f <file>).
 orchestrate agents export -n weather_agent --kind native -o agents/weather_agent.yaml --agent-only
-orchestrate tools export -n get_weather -o tools/get_weather.exported.yaml
+
+# Tool → ZIP (a transfer bundle of the source .py + requirements.txt), NOT YAML.
+# Use a plain underscore name: a dot in the base name (e.g. get_weather.exported.zip)
+# is REJECTED on reimport — "only alphanumeric characters and underscores are allowed".
+orchestrate tools export -n get_weather -o tools/get_weather_export.zip
+```
+**Reimporting a tool zip:** you cannot pass the zip to `tools import` (it tries to load
+it as a Python module). Unzip first, then import the contained source:
+```bash
+unzip get_weather_export.zip -d /tmp/gw && \
+  orchestrate tools import -k python -f /tmp/gw/get_weather.py -r /tmp/gw/requirements.txt
 ```
 Use `--safe` on `tools`/`agents`/`knowledge-bases` import to be prompted before
-overwriting.
+overwriting. *(Export/reimport behavior live-verified on IBM Cloud SaaS, ADK 2.12.0.)*
 
 ---
 
@@ -127,7 +142,7 @@ request."** For deeper, repeatable testing, escalate to the evaluations framewor
 | Agent import: required field error | Missing `spec_version`/`kind`/`name`/`description`. Add them. |
 | Agent import: "cannot be used to create a native agent" | `kind` mismatch — set `kind: native`. |
 | Import succeeds, agent ignores a tool | Weak tool `description`/docstring or instructions don't reference it. Improve docstring; name the tool in `instructions`. |
-| Docstring/type-hint warnings on tool import | Missing type hints, or a blank line between `Args:` and `Returns:`. Fix Google-style docstring. |
+| Docstring/type-hint warnings on tool import | **Often a false positive in 2.12** — the warning fires on every Python tool yet descriptions still parse. Verify the parsed schema before "fixing". Real causes: missing type hints, or a blank line between `Args:` and `Returns:`. |
 | "name cannot contain spaces" | Use snake_case names for tools/toolkits/agents. |
 | `ModuleNotFoundError` at tool runtime | Add the dep to the tool's `requirements.txt`, re-import with `-r`. Do **not** add `ibm-watsonx-orchestrate`. |
 | Cross-file import error | Tool files must be self-contained — inline helpers/models. |
@@ -140,9 +155,19 @@ request."** For deeper, repeatable testing, escalate to the evaluations framewor
 
 ---
 
-## 3. Built-in evaluation framework
+## 3. Built-in evaluation framework (AgentOps)
 
-Install the extra: `pip install "ibm-watsonx-orchestrate[agentops]"`.
+> **Full guide:** [agentops-evaluations.md](agentops-evaluations.md) — input formats
+> (validate-native TSV, generate CSV, eval config), the end-to-end workflow, and how
+> evaluations pair with observability traces.
+
+**The engine is an extra — install it or the commands fail** with
+`ModuleNotFoundError: No module named 'agentops'` (verified 2.12.0; the base install
+ships only the CLI shims):
+```bash
+pip install "ibm-watsonx-orchestrate[agentops]"
+```
+Evaluations also need watsonx.ai creds in `.env` (LLM-as-judge + test synthesis).
 
 | Command | Purpose |
 |---------|---------|
@@ -165,10 +190,22 @@ patterns. Run `orchestrate evaluations <cmd> --help` for current flags.
 ## 4. Observability / tracing
 
 - Start the local server with IBM telemetry: `orchestrate server start -i`
-- Inspect traces via `orchestrate observability traces` to
-  see the agent's tool-call decisions, latencies, and errors — the best way to
+- Inspect traces via `orchestrate observability traces` (subcommands: `search`, `export`)
+  to see the agent's tool-call decisions, latencies, and errors — the best way to
   understand *why* an agent chose (or skipped) a tool.
-  Example: `orchestrate observability traces search --last 1h`
+- **Capture the `trace_id` from the run response and export it directly** — this is the
+  reliable path:
+  ```bash
+  orchestrate observability traces export --trace-id <trace_id>
+  ```
+  On IBM Cloud SaaS (live-verified 2.12.0), `traces search --last 1h` returned **0 traces**
+  even when traces existed and were individually exportable — don't rely on `search`,
+  prefer `export --trace-id`. The `trace_id` is in every `/v1/orchestrate/runs` response.
+- **AgentOps v3 API** (rich trace JSON — observations, latency, scores, cost):
+  ```bash
+  curl -H "Authorization: Bearer $TOKEN" \
+    "<instance-url>/v1/agentops-v3/traces/<trace_id>"     # 200; old /v1/agentops/… → 404
+  ```
 
 ### Logs in Developer Edition
 
