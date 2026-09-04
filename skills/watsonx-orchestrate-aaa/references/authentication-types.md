@@ -160,10 +160,10 @@ RS256 JWT, `expires_in` 3600, claims `iss/aud/sub/tenant/scope/amr`.
 Exchanges a user's existing corporate SSO session for a downstream token. No second login.
 Fields: `sso: true`, `idp_config`, `app_config`, `server_url`.
 
-**Use when** users reach agents through **embedded web chat** on an SSO-enabled portal and
-you must call Workday/SAP/ServiceNow as the actual employee.
+**Use when** users reach agents 1. through **embedded web chat** on an SSO-enabled portal or 2. via REST API Secure and
+you must call an enterprise system as the actual employee.
 
-⚠ **Surface constraint: embedded web chat only.** Not the native UI. Not the REST API. 
+⚠ **Surface constraint: Embedded Web Chat and REST API Secure only.** Not the native UI. Not the REST API. 
 
 **Why the REST API cannot do it:** the flow depends on a JWT handshake only the web chat
 widget implements. Your backend builds a signed JWT whose `user_payload` is encrypted with
@@ -180,7 +180,7 @@ works on any surface — and *you* own the trust boundary (SKILL §4.6).
 Python ✅ · Remote MCP ❌ · Local MCP ❌ · Developer Edition ❌ 
 
 ⚠ **OBO cannot be used to import remote MCP toolkits** — no authenticated user session
-exists at import time. Use `key_value` for the draft import and reserve OBO for live. 
+exists at import time.
 
 ```yaml
 environments:
@@ -258,7 +258,7 @@ credentials — they delegate to the tools they call.
 | `oauth_auth_on_behalf_of_flow` | ❌ | ✅ |
 
 **For demos:** the four static kinds plus client-credentials run fully in Developer
-Edition. Auth-code needs SaaS. OBO needs SaaS *and* embedded web chat *and* a real IDP.
+Edition. Auth-code needs SaaS. OBO needs SaaS *and* Embedded Web Chat or REST API Secure *and* a real IDP.
 
 ### By scope
 

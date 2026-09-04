@@ -300,7 +300,7 @@ a REST caller can simply assert `{"roles": ["trip_booker"]}` in the request body
 this is not a footnote — it is the whole security argument. Ask: who can write that
 context, and why do you trust them?
 
-- **Embedded web chat / OBO:** roles ride inside a JWT the host backend signs, with
+- **Embedded web chat and REST API Secure / OBO:** roles ride inside a JWT the host backend signs, with
   `user_payload` encrypted to IBM's public key. Trustworthy *because* the client cannot
   forge it — the private key never leaves your backend.
 - **REST API Secure:** uses the same RS256 JWT + RSA-encrypted `user_payload` as the web

@@ -2,15 +2,16 @@
 
 This repo contains utilities to access IBM watsonx Orchestrate from agentic software development tools like IBM Bob. 
 
-There are two components:
+There are three components:
 
-1. [watsonx Orchestrate Skills](#watsonx-orchestrate-skills)
-2. [Experiment how to write documentation MCP servers](#watsonx-orchestrate-documentation-mcp-server)
+1. [watsonx Orchestrate Skill](#watsonx-orchestrate-skill-core)
+2. [watsonx Orchestrate Skill Security](#watsonx-orchestrate-skill-aaa)
+3. [Experiment how to write documentation MCP servers](#watsonx-orchestrate-documentation-mcp-server)
 
 The agentic assets in this repo have been created by developers in the community.
 
 
-## watsonx Orchestrate Skills
+## watsonx Orchestrate Skill Core
 
 **watsonx-orchestrate**
 
@@ -29,7 +30,30 @@ The skill supports the watsonx Orchestrate ADK v2.15.0.
 
 Thanks go to [Florin Manaila](https://de.linkedin.com/in/funmachines) for creating most of the skill! 
 
+**Setup**
+
+Copy [skills/watsonx-orchestrate/](skills/watsonx-orchestrate/) in your '.bob/skills/watsonx-orchestrate/' directory.
+
+Put this in '.bob/mcp.json':
+
+```json
+{
+  "mcpServers": {
+    "watsonx-orchestrate-adk-docs": {
+      "type": "streamable-http",
+      "url": "https://developer.watson-orchestrate.ibm.com/mcp",
+      "disabled": false
+    }
+  }
+}
+```
+
+
+## watsonx Orchestrate Skill AAA
+
 **watsonx-orchestrate-aaa**
+
+aaa: Authentication, Authorization, Accountability
 
 The [watsonx-orchestrate-aaa](skills/watsonx-orchestrate-aaa) skill provides several functions:
 
