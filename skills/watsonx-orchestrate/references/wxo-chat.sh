@@ -18,6 +18,15 @@
 #   Override active environment:
 #     ./wxo-chat.sh -n <agent-name> -e local "Your message"
 #
+#   Test the DEPLOYED (live) version instead of the draft (ADK 2.17+ agent versioning):
+#     ./wxo-chat.sh -n <agent-name> --live "Your message"
+#   Without --live the runs API targets the agent's DRAFT (live-verified 2.18.0) —
+#   so a default test proves the draft works, not what users of the deployed agent get.
+#
+#   Flow tools: when the agent starts a flow, the run ends with "A new flow has started…";
+#   the script then waits (up to --timeout) for the flow's result on the thread and returns
+#   THAT as final_message (live-verified 2.19.1).
+#
 # Output (JSON, always to stdout):
 #   {
 #     "status":          "success" | "error",
@@ -128,6 +137,7 @@ AGENT_NAME=""
 THREAD_ID=""
 ENVIRONMENT=""
 INCLUDE_REASONING=false
+TARGET_LIVE=false
 POLL_INTERVAL=2
 POLL_TIMEOUT=300
 MESSAGE=""
@@ -138,6 +148,7 @@ while [[ $# -gt 0 ]]; do
     --thread-id)        THREAD_ID="$2";     shift 2 ;;
     -e|--environment)   ENVIRONMENT="$2";   shift 2 ;;
     -r|--reasoning|--include-reasoning) INCLUDE_REASONING=true; shift ;;
+    --live)             TARGET_LIVE=true;   shift ;;
     --poll-interval)    POLL_INTERVAL="$2"; shift 2 ;;
     --timeout)          POLL_TIMEOUT="$2";  shift 2 ;;
     -h|--help)          usage ;;
@@ -177,32 +188,21 @@ if [[ -n "$TOKEN_EXPIRY" ]]; then
 fi
 
 # ─── Build API endpoints ──────────────────────────────────────────────────────────
-# BaseWXOClient sets base_url to:
-#   local dev → <wxo_url>/v1          (plain /v1)
-#   cloud/CPD → <wxo_url>/v1/orchestrate
+# Both local Developer Edition AND IBM Cloud SaaS use the SAME runtime paths:
+#   runs    → <wxo_url>/v1/orchestrate/runs   (async; poll /v1/orchestrate/runs/{run_id})
+#   agents  → <wxo_url>/v1/orchestrate/agents
+#   threads → <wxo_url>/v1/threads
 #
-# Then each client appends its own base_endpoint prefix:
-#   RunClient:     /orchestrate/runs  (local)  OR  /runs  (cloud)
-#   ThreadsClient: /threads           (always)
-#   AgentClient:   /orchestrate/agents (local) OR  /agents (cloud)
-#
-# Net result for each endpoint:
-#   local:  runs    → <wxo_url>/v1/orchestrate/runs
-#           threads → <wxo_url>/v1/threads
-#           agents  → <wxo_url>/v1/orchestrate/agents
-#   cloud:  runs    → <wxo_url>/v1/runs
-#           threads → <wxo_url>/v1/threads
-#           agents  → <wxo_url>/v1/agents
+# LIVE-VERIFIED 2026-06-29 against IBM Cloud SaaS (us-south, ADK 2.12.0):
+#   GET <instance-url>/v1/orchestrate/agents → 200
+#   GET <instance-url>/v1/agents            → 404  (WXO-PROXY-14009E)
+# An earlier version of this script used /v1/agents + /v1/runs for cloud — that 404s.
+# Do not reintroduce a local-vs-cloud split here.
 
-if [[ "$WXO_URL" =~ ^http://(localhost|127\.|0\.0\.0\.0|\[::1\]|host\.docker\.internal) ]]; then
-  RUNS_ENDPOINT="${WXO_URL}/v1/orchestrate/runs"
-  AGENTS_ENDPOINT="${WXO_URL}/v1/orchestrate/agents"
-else
-  RUNS_ENDPOINT="${WXO_URL}/v1/runs"
-  AGENTS_ENDPOINT="${WXO_URL}/v1/agents"
-fi
+RUNS_ENDPOINT="${WXO_URL}/v1/orchestrate/runs"
+AGENTS_ENDPOINT="${WXO_URL}/v1/orchestrate/agents"
 
-# Threads endpoint is always /v1/threads (regardless of local vs cloud)
+# Threads endpoint is /v1/threads (regardless of local vs cloud)
 THREADS_ENDPOINT="${WXO_URL}/v1/threads"
 
 # ─── Resolve agent name → agent ID ───────────────────────────────────────────────
@@ -254,18 +254,38 @@ PYEOF
 
 [[ -n "$AGENT_ID" ]] || die "Agent '${AGENT_NAME}' not found. Run: orchestrate agents list"
 
+# ─── Resolve the live environment id (only with --live) ─────────────────────────
+# The runs API defaults to the agent's draft. To hit the deployed version, pass the
+# agent's `live` environment UUID as `environment_id` (live-verified 2.18.0).
+
+ENVIRONMENT_ID=""
+if [[ "$TARGET_LIVE" == true ]]; then
+  ENVS_FILE="${_TMPDIR}/agent_envs.json"
+  curl -sf -H "Authorization: Bearer ${TOKEN}" \
+    "${AGENTS_ENDPOINT}/${AGENT_ID}/environment" -o "$ENVS_FILE" \
+    || die "Failed to read environments for agent '${AGENT_NAME}'"
+  ENVIRONMENT_ID=$(python3 -c "
+import sys, json
+envs = json.load(open(sys.argv[1]))
+live = [e for e in envs if e.get('name') == 'live']
+print(live[0]['id'] if live and live[0].get('current_version') else '')
+" "$ENVS_FILE")
+  [[ -n "$ENVIRONMENT_ID" ]] || die "Agent '${AGENT_NAME}' has no deployed live version. Run: orchestrate agents deploy -n ${AGENT_NAME}"
+fi
+
 # ─── Create run ──────────────────────────────────────────────────────────────────
 
 RUN_PAYLOAD_FILE="${_TMPDIR}/run_payload.json"
 RUN_RESPONSE_FILE="${_TMPDIR}/run_response.json"
 
-python3 - "$AGENT_ID" "$THREAD_ID" "$MESSAGE" "$RUN_PAYLOAD_FILE" <<'PYEOF'
+python3 - "$AGENT_ID" "$THREAD_ID" "$MESSAGE" "$RUN_PAYLOAD_FILE" "$ENVIRONMENT_ID" <<'PYEOF'
 import sys, json
 
 agent_id       = sys.argv[1]
 thread_id      = sys.argv[2]
 message        = sys.argv[3]
 output_file    = sys.argv[4]
+environment_id = sys.argv[5]
 
 payload = {
     "message":      {"role": "user", "content": message},
@@ -274,6 +294,8 @@ payload = {
 }
 if thread_id:
     payload["thread_id"] = thread_id
+if environment_id:
+    payload["environment_id"] = environment_id
 
 with open(output_file, "w") as fh:
     json.dump(payload, fh)
@@ -356,16 +378,63 @@ PYEOF
   exit 1
 fi
 
-# ─── Fetch thread messages ────────────────────────────────────────────────────────
+# ─── Extract the assistant message from the run result ────────────────────────────
+# The polled run result already carries the assistant reply at result.data.message
+# (with content + step_history). Use it directly. (Earlier versions fetched
+# ${THREADS_ENDPOINT}/${THREAD_ID}/messages, which 404s on IBM Cloud SaaS —
+# LIVE-VERIFIED 2026-06-29, ADK 2.12.0.) We write it as a single-element list so the
+# downstream extractor (which expects a messages array) works unchanged.
 
 MESSAGES_FILE="${_TMPDIR}/messages.json"
 
-curl -sf \
-  -H "Authorization: Bearer ${TOKEN}" \
-  -H "Content-Type: application/json" \
-  "${THREADS_ENDPOINT}/${THREAD_ID}/messages" \
-  -o "$MESSAGES_FILE" \
-  || die "Failed to fetch messages for thread_id=${THREAD_ID}"
+# Flow tools run ASYNC (live-verified 2.19.1 SaaS): the run completes with
+# "A new flow has started…" and the flow's result is posted to the thread later.
+# In that case poll ${WXO_URL}/v1/orchestrate/threads/<id>/messages (200 on SaaS; the old
+# /v1/threads path is the one that 404s) and use the first assistant text after the start
+# notice as the final message, keeping the run's step_history for the reasoning trace.
+WXO_TOKEN="$TOKEN" python3 - "$STATUS_FILE" "$MESSAGES_FILE" "$WXO_URL" "$THREAD_ID" "$POLL_TIMEOUT" <<'PYEOF'
+import sys, json, os, time, urllib.request
+status_file, messages_file, wxo_url, thread_id, timeout = sys.argv[1:6]
+with open(status_file) as f:
+    run = json.load(f)
+msg = run.get("result", {}).get("data", {}).get("message", {})
+FLOW_STARTED = "A new flow has started"
+
+def texts(m):
+    c = m.get("content")
+    if isinstance(c, str):
+        return [c]
+    return [i.get("text", "") for i in (c or []) if isinstance(i, dict) and i.get("response_type") == "text"]
+
+if msg and any(FLOW_STARTED in t for t in texts(msg)):
+    url = f"{wxo_url}/v1/orchestrate/threads/{thread_id}/messages"
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {os.environ['WXO_TOKEN']}"})
+    deadline = time.time() + int(timeout)
+    flow_text = None
+    while time.time() < deadline and flow_text is None:
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                thread = json.load(r)
+        except Exception:
+            thread = []
+        seen_start = False
+        for m in thread if isinstance(thread, list) else []:
+            if m.get("role") != "assistant":
+                continue
+            for t in texts(m):
+                if FLOW_STARTED in t:
+                    seen_start = True
+                elif seen_start and t:
+                    flow_text = t
+        if flow_text is None:
+            time.sleep(3)
+    if flow_text:
+        msg = dict(msg, content=[{"response_type": "text", "text": flow_text}])
+    else:
+        sys.stderr.write(f"WARNING: flow did not post a result within {timeout}s\n")
+with open(messages_file, "w") as f:
+    json.dump([msg] if msg else [], f)
+PYEOF
 
 # ─── Extract and emit structured JSON output ─────────────────────────────────────
 
@@ -450,14 +519,18 @@ if include_reasoning:
                 if stype == "tool_calls":
                     tool_calls = []
                     for tc in detail.get("tool_calls", []):
+                        # Two shapes seen in the wild:
+                        #   SaaS runs API: {"name": ..., "args": {...}}
+                        #   OpenAI-style:  {"function": {"name": ..., "arguments": "..."}}
                         fn   = tc.get("function", {})
-                        args = fn.get("arguments")
+                        name = tc.get("name") or fn.get("name")
+                        args = tc.get("args", fn.get("arguments"))
                         try:
                             args = json.loads(args) if isinstance(args, str) else args
                         except (json.JSONDecodeError, TypeError):
                             pass
                         tool_calls.append({
-                            "tool":      fn.get("name"),
+                            "tool":      name,
                             "arguments": args,
                             "agent":     detail.get("agent_display_name"),
                         })

@@ -21,6 +21,10 @@ your application to own the UX and call the agent like any other backend service
 - **SaaS / on-prem:** the same **API service URL** you registered in §2a (the one
   containing `/instances/<id>`), with `/v1` appended — e.g.
   `https://api.<region>.watson-orchestrate.cloud.ibm.com/instances/<INSTANCE_ID>/v1`.
+  **Live-verified (2.12.0, us-south):** the runtime paths are under `/v1/orchestrate/…`
+  on SaaS — `GET <base>/v1/orchestrate/agents` → 200, `POST <base>/v1/orchestrate/runs`
+  → 200; the bare `/v1/agents` and `/v1/runs` return **404** (`WXO-PROXY-14009E`). Do not
+  drop the `/orchestrate` segment on SaaS.
 
 **Auth** = `Authorization: Bearer <token>` on every request.
 - **Local:** read the token the Developer Edition already minted:
@@ -45,12 +49,20 @@ agent's `id` (a UUID), **not** the display name and not the snake_case `name`.
 
 | Endpoint | Shape | Use it when |
 |----------|-------|-------------|
-| `POST /orchestrate/{agent_id}/chat/completions` | **OpenAI-compatible** | Drop-in for anything that already speaks OpenAI Chat Completions (IDEs, LangChain, existing chat UIs). Simplest. |
-| `POST /orchestrate/runs` (+ `GET /orchestrate/runs/{run_id}`) | **Rich, async** | You need tool-call/step outputs, fine-grained `llm_params` (e.g. greedy + `temperature: 0`), guardrails, usage, or async polling. |
+| `POST /orchestrate/{agent_id}/chat/completions` | **OpenAI-compatible** | Drop-in for anything that already speaks OpenAI Chat Completions (IDEs, LangChain, existing chat UIs). Simplest. Returns `usage` + `trace_id` + `run_id` (2.18.0). |
+| `POST /v2/orchestrate/{agent_id}/chat/completions` *(path is `/v2`, not `/v1`)* | OpenAI-compatible + `data`, `context` | The only path where **`tool_shortlisting`** takes effect (live-verified 2.18.0). **No `usage` field.** |
+| `POST /orchestrate/runs` (+ `GET /orchestrate/runs/{run_id}`) | **Rich, async** | You need tool-call/step outputs, fine-grained `llm_params` (e.g. greedy + `temperature: 0`), guardrails, async polling, or **the deployed (`live`) version** via `environment_id` (§4a). |
 | `POST /orchestrate/runs/stream` | Rich + SSE | Same richness, streamed token-by-token (identical to `runs?stream=true`). |
 | `POST /completions`, `POST /completions/chat` | **Model only, no agent** | Call a raw LLM through the AI Gateway without any agent/tool routing. |
 
 Rule of thumb: **`chat/completions` for portability, `orchestrate/runs` for fidelity.**
+
+> ⚠ **Every endpoint above runs the agent's DRAFT unless told otherwise** (live-verified
+> 2.18.0, with draft and live deliberately different). Only `/orchestrate/runs` accepted a
+> live target (`"environment_id"` in the body, §4a). `chat/completions` (v1 and v2) still
+> answered from the draft, even with `?environment_id=<live>`. If your app must serve exactly
+> the deployed version, use the runs API with `environment_id`, or keep the draft identical
+> to live (don't `agents import` to a production tenant without deploying).
 
 ---
 
@@ -88,6 +100,51 @@ curl -sX GET "$BASE/orchestrate/runs/$RUN_ID" -H "Authorization: Bearer $TOKEN"
 ```
 When `status: "completed"`, the reply text is at
 **`result.data.message.content[0].text`**. `step_history` carries tool outputs.
+
+The completed run also carries **`trace_id`** (32-hex) — capture it, it is your only handle
+on the telemetry in [agentops-evaluations.md](agentops-evaluations.md) §4.
+
+> **`usage` on the run: populated since 2.18.0** (it was `null` on every 2.13.0 run).
+> Live-verified 2.18.0:
+> ```json
+> "usage": { "model_name": "groq/openai/gpt-oss-120b",
+>   "model_usage": [{ "provider": "groq", "model_name": "openai/gpt-oss-120b",
+>                     "token_usage": { "prompt_tokens": 1432, "completion_tokens": 103,
+>                                      "total_tokens": 1535,
+>                                      "prompt_tokens_details": { "cached_tokens": 512 } } }],
+>   "token_usage": { "prompt_tokens": 1432, "completion_tokens": 103, "total_tokens": 1535, … } }
+> ```
+> `prompt_tokens` is the **sum over all LLM calls in the run** (here 672 + 760 from two
+> `GENERATION` observations), and `cached_tokens` is something the trace does not show. For
+> *per-call* tokens use the trace (`observation.usage` on `GENERATION`). On an older tenant
+> `usage` may still be `null`, so code defensively.
+> Full field map: [agentops-evaluations.md](agentops-evaluations.md) §4.
+
+### 4a. Targeting draft vs live (agent versioning, 2.17+), live-verified 2.18.0
+
+```bash
+# the agent's environments: draft + live, each with current_version
+curl -s "$BASE/orchestrate/agents/$AGENT_ID/environment" -H "Authorization: Bearer $TOKEN"
+# run against the DEPLOYED version
+curl -sX POST "$BASE/orchestrate/runs" -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"agent_id":"'"$AGENT_ID"'","environment_id":"'"$LIVE_ENV_ID"'","message":{"role":"user","content":"Hi"}}'
+```
+Omit `environment_id` → **draft**. The same `thread_id` can be resumed with
+`environment_id` on each call (verified multi-turn on live). Release/switch/rollback
+endpoints: SKILL.md §3.3d. `wxo-chat.sh --live` does this lookup for you.
+
+### 4b. Answering user-activity flows over the API (2.18.0)
+
+When an agent starts a flow with user activities, the run returns *"A new flow has
+started… This chat session is currently dedicated to the flow"*, and the thread is blocked.
+Read `GET /v1/orchestrate/threads/{thread_id}/messages`: each pending activity is a message
+with `content[0].response_type == "multiturn_form"` (prompt at `json_schema.description`,
+`activity_info.action_status: "pending"`). **Answer it by posting a plain-text run on the same
+`thread_id`.** The flow replies *"Thanks for your input, continuing the flow now"* and posts
+the next form. When the flow ends, the agent resumes and summarizes.
+
+`step_history` also has **no per-step timestamps**, so you cannot derive per-step latency
+from it. That, too, lives in the trace (`observation.latency`).
 
 **Streaming** (`/orchestrate/runs/stream`, or `/orchestrate/runs?stream=true`)
 emits an SSE event sequence:
@@ -155,3 +212,36 @@ Checklist:
 > When something here isn't spelled out (exact SaaS path, a body field, new
 > events), query **`wxo-docs`** (`SearchIbmWatsonxOrchestrateAdk`) rather than
 > guessing — runtime APIs change faster than this skill.
+
+---
+
+## 8. 2026 runtime/observability updates (verify per environment)
+
+- **Standardized error responses** — all proxy errors now return a consistent JSON
+  shape with **machine-readable error codes** and a **transaction ID**. Log the
+  transaction ID and switch on the stable error code instead of parsing message
+  strings; surface the id in your app's error reporting for support/troubleshooting.
+- **Context compaction at the API level** — long-running conversations can overflow
+  the context window. Enable compaction via the agent config (`compaction_settings`,
+  see [agents-tools-schemas.md](agents-tools-schemas.md)) so multi-turn `thread_id`
+  conversations summarize automatically (default threshold ~20,000 tokens) rather
+  than failing.
+- **AgentOps v3 traces** — retrieve execution traces via
+  `GET v1/agentops-v3/traces/{trace_id}`. Context-variable changes are now tracked
+  per node; client apps can also consume intermediate context updates through
+  embedded-chat runtime events. Use this for production debugging of agentic
+  workflows instead of the run `step_history` alone — it is also the **only** place
+  token counts, per-span latency and the span tree exist. Field map and the
+  native-vs-derive boundary: [agentops-evaluations.md](agentops-evaluations.md) §4–§6.
+  ⚠ **Cost is not computed for you** — `totalCost` returns `0`; tokens are exact,
+  pricing is yours (§5 there).
+- **Sensitive-data masking** — values marked sensitive in a flow are masked in chat
+  history, the flow inspector, and traces; don't expect to read them back from the
+  trace/run output.
+- **File upload (chat_with_docs / file-upload agents)** — `POST <base>/v1/orchestrate/upload-to-s3`
+  (multipart: `files=<file>`, `data={text, fileMetaData}`) → returns COS presigned
+  URLs. ⚠ The ADK `RunClient.upload_file_to_s3` posts to `/v1/upload-to-s3/` on cloud →
+  **404**; use `/v1/orchestrate/upload-to-s3` (no trailing slash) → 200. **Note:** even
+  with a valid upload, `chat_with_docs` agents did **not** read the file via
+  `/v1/orchestrate/runs` in testing — that feature is wired for the chat-UI/web-chat
+  upload widget. For programmatic document RAG, use a `knowledge_base` instead.

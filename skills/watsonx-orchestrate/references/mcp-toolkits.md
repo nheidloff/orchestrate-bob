@@ -146,6 +146,26 @@ authoring agents/tools/toolkits/models/KBs/connections.
 (Match the MCP server version to your installed ADK; set
 `WXO_MCP_WORKING_DIRECTORY` to your project root.)
 
+⚠ **2.19.1: the `uvx` form above crashes at startup** with
+`FileNotFoundError: pyproject.toml not found`. The server's config loader walks up from its own
+install directory for a `pyproject.toml` and raises when there is none, which is always
+the case under uvx's cache. Live-verified workaround: install it into a venv that sits
+under any folder with a `pyproject.toml`, and point `command` at that binary:
+```bash
+mkdir -p ~/.wxo-mcp && cd ~/.wxo-mcp
+printf '[project]\nname = "wxo-mcp-host"\nversion = "0.0.0"\n' > pyproject.toml
+uv venv .venv --python 3.12 && uv pip install --python .venv/bin/python ibm-watsonx-orchestrate-mcp-server==2.19.1
+```
+```json
+"watsonx-orchestrate-adk": { "command": "/Users/<you>/.wxo-mcp/.venv/bin/ibm-watsonx-orchestrate-mcp-server",
+                             "env": { "WXO_MCP_WORKING_DIRECTORY": "/path/to/project" } }
+```
+2.19.1 exposes **72 tools**. New in 2.19: Developer Edition tools
+(`start_developer_edition_server`, `stop_…`, `reset_…`, `eject_…`) and environment tools
+(`list_environments`, `add_environment` with `iam_url`, `activate_environment`, `remove_environment`).
+The rest cover agents, tools, toolkits, KBs, connections, models and model policies,
+channels, phone, voice and skills.
+
 Read-only tools: `list_agents`, `export_agent`, `get_tool_template`,
 `list_tools`, `list_toolkits`, `list_knowledge_bases`,
 `check_knowledge_base_status`, `list_connections`, `list_voice_configs`,
